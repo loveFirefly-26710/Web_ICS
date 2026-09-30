@@ -1,0 +1,111 @@
+name: CI
+
+# 每次 push 与 PR 都跑一遍，也支持手动触发。交付产物、跨平台可编译性与
+# 依赖漏洞都不能靠「我本机跑过」来保证。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支上新的推送会取消上一次仍在跑的构建，省 runner 也省等待
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 格式 / vet / 交叉构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 必须 >= 1.25：go1.23 的标准库有 34 条已公开漏洞，
+          # 其中 4 条落在 HTTP 请求处理路径上。
+          go-version: '1.25.x'
+          cache: true
+
+      - name: 测试
+        # 有真实断言的是配置文件解析与包元数据解析两块；其余包目前只做到
+        # 「编译一遍」，挡住语法、类型与导入错误。待补清单见 PLAN.md 的 P0-3。
+        run: go test ./...
+
+      - name: 格式 / vet / 交叉构建 / 构建机路径核对
+        # build.sh 已经把这几件事串好了，直接复用它，避免 CI 与本地出包
+        # 走两套流程而慢慢漂移。
+        # 用 bash 显式调用而不是 ./build.sh：仓库里 build.sh 的模式是 100644
+        # （Windows 上开发的仓库拿不到可执行位），直接执行会 Permission denied。
+        run: bash ./build.sh
+
+      - name: 产物冒烟
+        # 能构建不等于能跑。--version 会真正启动进程并打印工具链信息，
+        # 静态链接或入口初始化出问题在这一步就会暴露。
+        run: ./dist/web_ics-linux-amd64 --version
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: web_ics
+          path: |
+            dist/web_ics.exe
+            dist/web_ics-linux-amd64
+          if-no-files-found: error
+
+  windows:
+    name: Windows 编译与冒烟
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: 编译
+        run: go build -trimpath ./...
+
+      - name: 产物冒烟
+        # Windows 是第二交付平台，单独验证一次构建与启动
+        run: |
+          go build -trimpath -o dist/web_ics.exe ./cmd/web_ics
+          ./dist/web_ics.exe --version
+
+  security:
+    name: 依赖漏洞扫描
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: govulncheck
+        # 只报「代码里真的调到了」的漏洞，不是列一堆 CVE 吓人。
+        # 有可达漏洞时它以非零码退出，构建直接红。
+        # 走绝对路径：go install 落在 $(go env GOPATH)/bin，
+        # 不保证在同一步的 PATH 里。
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  docker:
+    name: Docker 镜像构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker build
+        # Docker 是主部署形态，这里至少验证 Dockerfile 能构建出镜像，
+        # 免得容器路径长期没人走而悄悄坏掉。
+        run: docker build -t web_ics:ci .

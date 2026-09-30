@@ -1,0 +1,115 @@
+name: Release
+
+# 打 v* tag 时发布。一次产出两个文件：
+#   web_ics.exe               Windows 免安装单文件
+#   web_ics-linux-amd64       Linux 免安装单文件
+#
+# 只用一个 job：build.sh 本来就会同时交叉编译两个平台，拆成两个 job 会
+# 变成两套构建路径，早晚漂移。
+#
+# 留在 windows runner 上是为了冒烟：只有 Windows 能真的执行 web_ics.exe，
+# ubuntu 上跑不了 .exe，Windows 产物就只能靠「编译通过」来保证。代价是比
+# ubuntu runner 贵。
+on:
+  push:
+    tags:
+      - "v*"
+
+# 创建 Release 需要写权限，其余一律只读
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Release 正文要列「上一个 tag 到本次」的提交，浅克隆拿不到历史
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: 从 tag 解析版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $v) { throw "解析不出版本号：${{ github.ref_name }}" }
+          Write-Host "版本号: $v"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: 构建（复用 build.sh）
+        # 复用脚本而不是另写 go build：本地出包与 CI 出包必须是同一条路径，
+        # 而且 build.sh 里还有 gofmt、vet 和「构建机路径不得进二进制」的核对。
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: bash ./build.sh
+
+      - name: 冒烟并核对版本号已注入
+        shell: pwsh
+        run: |
+          $out = ./dist/web_ics.exe --version
+          Write-Host $out
+          if ($out -notmatch [regex]::Escape("${{ steps.ver.outputs.version }}")) {
+            throw "版本号没注入进二进制：$out"
+          }
+
+      - name: 上传产物（Actions 页面留存）
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/web_ics.exe
+            dist/web_ics-linux-amd64
+          if-no-files-found: error
+
+      - name: 创建 GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          extra=""
+          # 带连字符的 tag 视为预发布，例如 v0.2.0-rc1
+          case "$tag" in *-*) extra="--prerelease" ;; esac
+
+          # 正文自己拼，不用 gh 的 --generate-notes：它给不出「下哪个文件、怎么用」，
+          # 而且首个版本没有上一个 tag 可比，只会输出一行 Full Changelog。
+          prev="$(git describe --tags --abbrev=0 --match 'v*' "${tag}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            range="${prev}..${tag}"
+            echo "上一个版本: $prev"
+          else
+            range="${tag}"
+            echo "这是第一个版本"
+          fi
+
+          {
+            echo "两个产物都是自包含的，前端资源编译在里面，不需要任何运行时。"
+            echo
+            echo "| 文件 | 平台 | 怎么用 |"
+            echo "|---|---|---|"
+            echo '| `web_ics.exe` | Windows x64 | 拷到任意目录双击 |'
+            echo '| `web_ics-linux-amd64` | Linux x86-64 | `chmod +x` 后直接运行 |'
+            echo
+            echo "首次启动会在后台建正文语料（59 个包约 4 分钟），这期间正文搜不到东西，标题能搜。"
+            echo "用法与部署见仓库的 README。"
+            echo
+            echo "## 本版提交"
+            echo
+            git log --no-merges --pretty='- %s' "$range"
+          } > "$RUNNER_TEMP/notes.md"
+
+          gh release create "$tag" \
+            --title "Web_ICS ${tag#v}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            $extra \
+            dist/web_ics.exe \
+            dist/web_ics-linux-amd64

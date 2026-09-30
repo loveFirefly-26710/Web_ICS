@@ -1,0 +1,7 @@
+# 统一行尾为 LF。
+#
+# 仓库在 Windows 上开发，系统级 core.autocrlf=true 会把文件签出成 CRLF，
+# 但 CI 和 Docker 都在 Linux 上跑。CRLF 的 build.sh 在 Linux 下会因
+# shebang 带 ^M 而执行失败，CRLF 的 .go 文件会被 gofmt -l 判成未格式化，
+# 直接把 build.sh 卡在第一步。
+* text=auto eol=lf

@@ -1,0 +1,114 @@
+name: Deploy
+
+# push 到 main 时自动更新服务器上的 Docker 服务。
+#
+# 镜像在 CI 上构建后推到 GHCR，服务器只负责拉取与重启。不在服务器上编译，
+# 是因为目标机器是 2 核 1G，跑 go build 会把它压垮，也会把部署拖到好几分钟。
+#
+# 需要先在仓库的 Settings → Secrets and variables → Actions 里配好：
+#   DEPLOY_HOST     服务器地址
+#   DEPLOY_USER     SSH 用户名
+#   DEPLOY_SSH_KEY  私钥全文（含 BEGIN/END 行）
+# 可选：
+#   DEPLOY_PORT     SSH 端口，默认 22
+#   DEPLOY_DIR      服务器上的 compose 目录，默认 /opt/web_ics
+#
+# 另外还要在同一个页面的 Variables 标签下加一个 DEPLOY_ENABLED = true。
+# 它是这个 workflow 的总开关：没设之前两个 job 都显示为「跳过」，
+# 既不会因为缺 secrets 报红，也不会白构建镜像推到 GHCR。
+# 服务器准备好之后再设成 true。
+# 用 vars 而不是 secrets，是因为 secrets 在 job 级 if 里不可靠。
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# 部署不能被打断，否则可能停在「镜像已换、容器没起」的中间态
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+  DEPLOY_DIR: ${{ secrets.DEPLOY_DIR || '/opt/web_ics' }}
+
+jobs:
+  build-image:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 这个 job 存在的唯一目的是让服务器能 docker compose pull。
+    # 没有服务器时它只是每次 push 白构建一个镜像，所以跟 deploy 一起受总开关控制。
+    if: vars.DEPLOY_ENABLED == 'true'
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算镜像名
+        id: meta
+        # GHCR 的路径只接受小写，而 github.repository 会带上原始大小写，
+        # 直接拼会 400。用 bash 的 ${var,,} 转小写。
+        run: |
+          img="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=$img" >> "$GITHUB_OUTPUT"
+          echo "镜像: $img"
+
+      - name: 登录 GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: 构建
+        run: |
+          docker build \
+            -t "${{ steps.meta.outputs.image }}:latest" \
+            -t "${{ steps.meta.outputs.image }}:sha-${GITHUB_SHA::7}" \
+            .
+
+      - name: 推送
+        run: docker push --all-tags "${{ steps.meta.outputs.image }}"
+
+  deploy:
+    name: 更新服务器
+    needs: build-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 总开关。没设 DEPLOY_ENABLED 时这个 job 显示为「跳过」（灰色），
+    # 而不是每次 push 都因为缺 secrets 报红。服务器准备好之后再打开。
+    # 用 vars 而不是 secrets：secrets 在 job 级 if 里不可靠。
+    if: vars.DEPLOY_ENABLED == 'true'
+    steps:
+      - name: 检查部署凭据
+        run: |
+          missing=""
+          [ -n "${{ secrets.DEPLOY_HOST }}" ] || missing="$missing DEPLOY_HOST"
+          [ -n "${{ secrets.DEPLOY_USER }}" ] || missing="$missing DEPLOY_USER"
+          [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ] || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::缺 secrets:$missing。在 Settings → Secrets and variables → Actions 里补上，或者删掉这个 workflow。"
+            exit 1
+          fi
+
+      - name: 准备密钥
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # 首次连接要写 known_hosts，否则 StrictHostKeyChecking 会把连接拦下。
+          # 想更严一点就把服务器指纹存成 secret，别用 ssh-keyscan。
+          ssh-keyscan -p "$DEPLOY_PORT" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 拉取新镜像并重启
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$DEPLOY_PORT" \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "set -e
+             cd '$DEPLOY_DIR'
+             docker compose pull web_ics
+             docker compose up -d web_ics
+             sleep 3
+             docker compose ps web_ics
+             curl -fsS http://127.0.0.1:8080/healthz || true"

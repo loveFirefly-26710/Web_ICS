@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阅读器</title>
+<link rel="stylesheet" href="/static/style.css?v=21">
+</head>
+<body class="viewer">
+
+<header class="topbar">
+  <a class="brand" href="/" title="返回首页" aria-label="返回首页">
+    <span class="brand-mark">Web_ICS</span>
+  </a>
+  <button id="toggle-side" class="navbtn icon" title="显示/隐藏目录">☰</button>
+  <div class="crumb" id="crumb"><a href="/">文档库</a></div>
+  <!-- 文档页搜索框：只搜当前文档包（与首页搜全库相对应）。
+       范围由页面上下文决定，不需要用户选，因此没有"范围"控件。 -->
+  <div class="topbar-search">
+    <input id="q" type="search" placeholder="在本文档中搜索…" autocomplete="off">
+    <button id="btn-search" class="navbtn" title="在本文档中搜索">搜索</button>
+  </div>
+  <div class="topbar-right">
+    <button id="btn-prev" class="navbtn icon" title="上一篇">↑</button>
+    <button id="btn-next" class="navbtn icon" title="下一篇">↓</button>
+    <button id="btn-top" class="navbtn icon" title="回到顶部">⇱</button>
+    <span id="mem" class="meta" title="进程内存占用"></span>
+  </div>
+</header>
+
+<div class="layout" id="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <span class="side-title">目录</span>
+      <button id="collapse-all" class="mini" title="全部折叠">全部折叠</button>
+    </div>
+    <div class="side-filter">
+      <input id="tree-filter" type="search" placeholder="筛选目录…" autocomplete="off">
+    </div>
+    <div id="tree" class="tree">
+      <div class="tree-loading">正在加载目录…</div>
+    </div>
+  </aside>
+  <div class="splitter" id="splitter" title="拖动调整宽度"></div>
+  <main class="content">
+    <!-- 正文 iframe。
+         sandbox 只给 allow-scripts：文档自带的脚本要跑（正文里的标签页切换
+         就靠它），但不能让它碰到主站。
+
+         为什么不加 allow-same-origin：两者同时给等于没沙箱，同源的 frame
+         可以自己把自己的 sandbox 属性摘掉。而且文档正文用不到它：
+         包内文件里 localStorage / sessionStorage / document.cookie /
+         document.domain 的命中数为 0，XHR 只出现在文档自带的 jQuery 里。
+
+         代价：「回到顶部」按钮取不到 contentDocument（那里本来就包了 try/catch，
+         跨源时静默忽略）。 -->
+    <iframe id="frame" name="topic" src="about:blank" title="文档正文"
+            sandbox="allow-scripts"></iframe>
+
+    <!-- 搜索结果面板：覆盖在正文之上，不离开当前文档。
+         点结果直接在下面的 iframe 里打开，关掉面板即可继续读原文。 -->
+    <section id="searchPane" class="searchpane docpane" hidden>
+      <div class="searchpane-head">
+        <h2 class="search-title">本文档搜索结果</h2>
+        <span id="searchStat" class="status"></span>
+        <button id="btn-close-search" class="mini" title="关闭搜索结果">关闭</button>
+      </div>
+      <div id="searchResults" class="searchresults"></div>
+      <div id="searchPager" class="pager" hidden></div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/mem.js?v=21"></script>
+<script src="/static/viewer.js?v=21"></script>
+</body>
+</html>
