@@ -1190,29 +1190,47 @@ web_ics --selftest --doc-root <文档库目录>
 自检与单元测试都覆盖了认证逻辑：前者用空 CA 池加手工构造的连接状态打 `Handler`，
 后者现造证书起真 TLS 服务。但那两条都在进程内。要验真实二进制加真实证书，按下面走。
 
-先造一套证书。用 openssl，Linux 与 Windows 的 Git Bash 都带：
+先造一套证书。不需要扩展文件：扩展写在 CSR 上，签发时用 `-copy_extensions copy`
+拷过去。这样每条命令都是单行，在 cmd 里也能直接贴。
 
 ```bash
 mkdir -p /tmp/certs && cd /tmp/certs
+
 openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 3650 \
-  -subj "/CN=test CA" -addext "basicConstraints=critical,CA:TRUE" \
+  -subj "/CN=test CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
   -addext "keyUsage=critical,keyCertSign,cRLSign"
 
-printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
-openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
-  -subj "/CN=127.0.0.1"
+openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
+  -subj "/CN=127.0.0.1" \
+  -addext "subjectAltName=IP:127.0.0.1" \
+  -addext "extendedKeyUsage=serverAuth"
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out server.crt -days 365 -extfile server.ext
+  -out server.crt -days 365 -copy_extensions copy
 
-printf 'extendedKeyUsage=clientAuth\n' > client.ext
-openssl req -newkey rsa:2048 -nodes -keyout alice.key -out alice.csr -subj "/CN=alice"
+openssl req -new -newkey rsa:2048 -nodes -keyout alice.key -out alice.csr \
+  -subj "/CN=alice" -addext "extendedKeyUsage=clientAuth"
 openssl x509 -req -in alice.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out alice.crt -days 365 -extfile client.ext
+  -out alice.crt -days 365 -copy_extensions copy
 
 # 吊销名单：alice 的指纹
 openssl x509 -in alice.crt -noout -fingerprint -sha256 |
   sed 's/.*=//; s/://g' | tr 'A-Z' 'a-z' | sed 's/^/sha256:/' > deny.txt
 ```
+
+> 在 Git Bash 里跑要小心路径转换。`-subj "/CN=alice"` 里的 `/CN` 会被 MSYS 当成
+> 路径，改写成 `E:/Develop/Git/CN=alice`，openssl 报
+> `subject name is expected to be in the format /type0=value0/...`。三个办法：
+>
+> - 开头加一句 `export MSYS_NO_PATHCONV=1`（推荐）；
+> - 把 `-subj "/CN=alice"` 写成 `-subj "//CN=alice"`，双斜杠会被还原成单斜杠；
+> - 或者改用 cmd，cmd 不做这种转换。
+
+> `-copy_extensions copy` 会把 CSR 里的全部扩展拷进证书。自己的 CSR 没问题，
+> 但不要拿它去签别人给的 CSR，那样对方能在 CSR 里塞 `CA:TRUE` 之类的扩展。
+
+> 在 cmd 里跑的话路径要写成 `E:\...`：给 `web_ics.exe` 传 `/tmp/certs/ca.crt`
+> 会报 `The system cannot find the path specified`。
 
 起服务，前台跑方便看日志：
 
