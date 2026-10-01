@@ -1204,12 +1204,14 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 3650 
 openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
   -subj "/CN=127.0.0.1" \
   -addext "subjectAltName=IP:127.0.0.1" \
-  -addext "extendedKeyUsage=serverAuth"
+  -addext "extendedKeyUsage=serverAuth" \
+  -addext "keyUsage=digitalSignature"
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out server.crt -days 365 -copy_extensions copy
 
 openssl req -new -newkey rsa:2048 -nodes -keyout alice.key -out alice.csr \
-  -subj "/CN=alice" -addext "extendedKeyUsage=clientAuth"
+  -subj "/CN=alice" -addext "extendedKeyUsage=clientAuth" \
+  -addext "keyUsage=digitalSignature"
 openssl x509 -req -in alice.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out alice.crt -days 365 -copy_extensions copy
 
@@ -1217,6 +1219,15 @@ openssl x509 -req -in alice.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 openssl x509 -in alice.crt -noout -fingerprint -sha256 |
   sed 's/.*=//; s/://g' | tr 'A-Z' 'a-z' | sed 's/^/sha256:/' > deny.txt
 ```
+
+> 两张证书都要带 `keyUsage=digitalSignature`。客户端证书只写 `extendedKeyUsage`
+> 时，Windows 的证书选择器可能不认，浏览器就不会把它递出去。表现是服务端收到一个
+> 没有证书的握手，页面显示 401 的「需要客户端证书」，看不出是哪一侧的问题。
+
+> Windows 上要装两处：`ca.crt` 进「受信任的根证书颁发机构」（本地计算机或当前
+> 用户都行），客户端证书（`alice.pfx`）进「个人」。装完可以用
+> `certutil -user -store My` 看个人库、`certutil -store Root` 看本地计算机的
+> 受信任根，确认装没装上、有没有私钥。
 
 > 在 Git Bash 里跑要小心路径转换。`-subj "/CN=alice"` 里的 `/CN` 会被 MSYS 当成
 > 路径，改写成 `E:/Develop/Git/CN=alice`，openssl 报
