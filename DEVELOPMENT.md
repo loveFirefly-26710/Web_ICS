@@ -1224,6 +1224,12 @@ openssl x509 -in alice.crt -noout -fingerprint -sha256 |
 > 时，Windows 的证书选择器可能不认，浏览器就不会把它递出去。表现是服务端收到一个
 > 没有证书的握手，页面显示 401 的「需要客户端证书」，看不出是哪一侧的问题。
 
+> 握手超时也是个坑。标准库的 `http.Server` 拿 `ReadHeaderTimeout` 当作 TLS 握手的
+> 截止时间，默认给的是 10 秒。开了客户端证书认证之后，用户要在浏览器弹出的框里挑
+> 证书，10 秒经常不够，表现同样是「点确定没反应」，服务端日志里是一句握手 EOF。
+> 所以 `NewHTTPServer` 在 `tlsCfg` 非空时把 `ReadHeaderTimeout` 放宽到 60 秒。
+> 实测：不完成握手的连接，改之前 11 秒被断，改之后 61 秒。
+
 > Windows 上要装两处：`ca.crt` 进「受信任的根证书颁发机构」（本地计算机或当前
 > 用户都行），客户端证书（`alice.pfx`）进「个人」。装完可以用
 > `certutil -user -store My` 看个人库、`certutil -store Root` 看本地计算机的

@@ -117,6 +117,7 @@ func main() {
 		}
 		tlsCfg = tc
 		log.Printf("客户端证书认证已启用（CA: %s），服务走 HTTPS", *clientCA)
+		log.Printf("TLS 握手超时放宽到 60 秒：浏览器里挑证书慢一点也不会被掐断")
 		if *clientCertDeny != "" {
 			log.Printf("客户端证书吊销名单: %s", *clientCertDeny)
 		}
