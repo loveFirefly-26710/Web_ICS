@@ -374,6 +374,10 @@ tls-cert = ./certs/server.crt
 tls-key = ./certs/server.key
 ```
 
+相对路径按配置文件所在目录解析，所以 `./certs/` 指的是配置文件旁边那个 `certs`
+目录。证书放在别处就写完整路径，比如 `client-ca = E:\ics-certs\ca.crt`。
+找不到文件时启动日志会打出它实际找的那个路径，照着改就行。
+
 `client-ca` 里可以放多张 CA 证书，轮换 CA 时新旧并存就能平滑过渡。配了
 `client-ca` 却没配证书或私钥时服务直接拒绝启动，不会退化成「以为开了其实没开」。
 
