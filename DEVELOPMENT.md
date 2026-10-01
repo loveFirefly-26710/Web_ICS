@@ -1185,7 +1185,72 @@ web_ics --selftest --doc-root <文档库目录>
 
 发布二进制前必须跑一遍，这是回答「冻结产物里到底是新代码还是旧代码」最快的手段。
 
-### 二、命令行核验清单
+### 二、客户端证书认证（要真证书）
+
+自检与单元测试都覆盖了认证逻辑：前者用空 CA 池加手工构造的连接状态打 `Handler`，
+后者现造证书起真 TLS 服务。但那两条都在进程内。要验真实二进制加真实证书，按下面走。
+
+先造一套证书。用 openssl，Linux 与 Windows 的 Git Bash 都带：
+
+```bash
+mkdir -p /tmp/certs && cd /tmp/certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 3650 \
+  -subj "/CN=test CA" -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
+openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
+  -subj "/CN=127.0.0.1"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out server.crt -days 365 -extfile server.ext
+
+printf 'extendedKeyUsage=clientAuth\n' > client.ext
+openssl req -newkey rsa:2048 -nodes -keyout alice.key -out alice.csr -subj "/CN=alice"
+openssl x509 -req -in alice.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out alice.crt -days 365 -extfile client.ext
+
+# 吊销名单：alice 的指纹
+openssl x509 -in alice.crt -noout -fingerprint -sha256 |
+  sed 's/.*=//; s/://g' | tr 'A-Z' 'a-z' | sed 's/^/sha256:/' > deny.txt
+```
+
+起服务，前台跑方便看日志：
+
+```bash
+./dist/web_ics.exe --doc-root <文档库目录> --addr 127.0.0.1:8443 \
+  --tls-cert /tmp/certs/server.crt --tls-key /tmp/certs/server.key \
+  --client-ca /tmp/certs/ca.crt --client-cert-deny /tmp/certs/deny.txt
+```
+
+另开一个终端发请求。不要用 curl：Windows 上的 curl 是 Schannel 后端，不能从
+PEM 文件导入客户端证书（报 `schannel: Failed to import cert file`），也不认
+`--cacert`。用 `openssl s_client`：
+
+```bash
+# 不带证书，期望 401
+printf 'GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n' |
+  openssl s_client -connect 127.0.0.1:8443 -CAfile /tmp/certs/ca.crt \
+    -verify_return_error -quiet 2>&1 | grep -m1 -o 'HTTP/1\.[01] [0-9]*'
+
+# 带 alice 的证书，期望 200
+printf 'GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n' |
+  openssl s_client -connect 127.0.0.1:8443 -CAfile /tmp/certs/ca.crt \
+    -verify_return_error -quiet -cert /tmp/certs/alice.crt -key /tmp/certs/alice.key \
+    2>&1 | grep -m1 -o 'HTTP/1\.[01] [0-9]*'
+```
+
+`grep -m1` 不能换成 `head -1`：OpenSSL 3.5 会先往 stderr 打一行进度信息，
+合并输出之后第一行不是状态行。
+
+把 alice 的指纹填进 `deny.txt` 再重启，同一张证书就变成 403。换一张
+`extendedKeyUsage` 只有 `serverAuth` 的证书，握手阶段就断，服务端日志里是
+`x509: certificate specifies an incompatible key usage`。
+
+浏览器里试：CA 装进系统信任库，客户端证书导成 PKCS#12 再双击导入
+（`openssl pkcs12 -export -out alice.pfx -inkey alice.key -in alice.crt`）。
+Firefox 用自己的证书库，要单独导一次。
+
+### 三、命令行核验清单
 
 ```bash
 BASE=http://127.0.0.1:8080
@@ -1226,7 +1291,7 @@ curl -s --noproxy '*' -D - -o /dev/null "$BASE/static/style.css" | grep -i cache
 
 `lib=` 后面的 ID 从 `/api/libs` 的 `libId` 字段取。
 
-### 三、界面验证（需要真实渲染）
+### 四、界面验证（需要真实渲染）
 
 `agent-browser` 不支持 Windows。可行的替代是直接调用 Chromium 二进制做 headless 截图：
 
@@ -1259,7 +1324,7 @@ CHROME="C:/Users/<用户>/.agent-browser/browsers/chrome-<ver>/chrome.exe"
 - 断言「范围」不能只看请求 URL。钩子要同时 clone 响应体，确认全库检索的结果
   确实跨多个包，防止参数被静默忽略、退化成永远单库。
 
-### 四、排障顺序（先确认环境，再怀疑代码）
+### 五、排障顺序（先确认环境，再怀疑代码）
 
 `Failed to fetch` 报得很早（个位数毫秒）时，请求根本没发出去：服务没起、端口变了、
 页面过期。按这个顺序走，别一上来改代码：
@@ -1285,7 +1350,7 @@ CHROME="C:/Users/<用户>/.agent-browser/browsers/chrome-<ver>/chrome.exe"
   按文件路径反查持有者。别扫进程模块，那看不到数据文件句柄，
   会得出「没有进程占用」的错误结论。
 
-### 五、内存压测
+### 六、内存压测
 
 混合负载（库列表、顶层目录、二级目录、正文、图片）10 并发 60 轮，
 每轮后读 `/debug/healthz` 的 `rssBytes` 看增长曲线。
