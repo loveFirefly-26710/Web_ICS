@@ -91,7 +91,7 @@ internal/htmltext/    HTML 转纯文本（GBK 前置解码）
 internal/textfold/    ASCII 大小写折叠，字节长度严格不变
 internal/search/      标题索引与融合检索
 internal/corpus/      正文语料库：分片格式、建索引、全库扫描
-internal/server/      HTTP 服务、路由、并发闸门、限流、安全头
+internal/server/      HTTP 服务、路由、并发闸门、限流、安全头、客户端证书认证
 internal/memguard/    内存自守与 Go 运行时内存上限
 web/                  前端（原生 HTML/CSS/JS），同时是把它 embed 进二进制的 Go 包
 docs/                 正文语料库（默认位置）
@@ -107,7 +107,7 @@ dist/                 构建产物（不进版本库）
 | `internal/textfold` | 只折叠 ASCII 字母且字节长度不变 | 不做非 ASCII 大小写折叠 |
 | `internal/search` | 标题索引的构建、释放与查询，融合检索，正文段两条路径，摘要生成 | 不直接解压 zip，依赖由 `Options` 注入 |
 | `internal/corpus` | 分片格式与读写、建分片、新鲜度判定、全库并行扫描、按 URL 反查文档 | 不做分页与摘要（那是 `search`） |
-| `internal/server` | 路由、中间件链、并发闸门、每 IP 限流、安全头、Content-Type 处理、JSON 响应 | 不含检索算法 |
+| `internal/server` | 路由、中间件链、并发闸门、每 IP 限流、安全头、客户端证书认证、Content-Type 处理、JSON 响应 | 不含检索算法 |
 | `internal/memguard` | 周期性采样 RSS、四档降级、Go 运行时内存上限、对外粗粒度指标 | 不决定释放什么，由 `main` 注入回调 |
 
 `internal/search` 与 `internal/corpus` 的文件分工：
@@ -480,11 +480,17 @@ goroutine 一直活着却什么都没做。这是进程挂起，不是崩溃。
 中间件链的顺序有讲究：
 
 ```go
+// 没配客户端证书认证时
 withSecurityHeaders(withMethodGuard(s.withRateLimit(s.withGate(mux))))
+
+// 配了之后（ca 是 *ClientAuth），闸门插在安全头里面、方法判断外面
+withSecurityHeaders(ca.withClientCertAuth(withMethodGuard(s.withRateLimit(s.withGate(mux)))))
 ```
 
-- `withSecurityHeaders` 放最外层，这样限流的 `429`、闸门的 `503`、方法拒绝的 `405`
-  也带上头。
+- `withSecurityHeaders` 放最外层，这样限流的 `429`、闸门的 `503`、方法拒绝的 `405`、
+  以及客户端证书的 `401` 与 `403` 也带上头。
+- `withClientCertAuth` 排在方法判断与限流外面，未认证的请求不消耗并发槽位与限流
+  配额。它只在配了 `client-ca` 时存在，见下面「客户端证书认证」一节。
 - `withMethodGuard` 在限流之前，非 GET 与 HEAD 请求不消耗限流配额。服务是只读的，
   显式拒绝而不是静默按 GET 处理，可以避免请求体被中间层当成有效载荷缓存或转发。
 - `withRateLimit` 只作用于 `/api/search` 与 `/api/grep`（`isExpensivePath`）。
@@ -492,6 +498,40 @@ withSecurityHeaders(withMethodGuard(s.withRateLimit(s.withGate(mux))))
   连发几十个 `/api/nav`，统一限流会把正常浏览挡掉。
 - `withGate` 在内存降级时返回 `503`（带 `Retry-After: 5`），全局信号量满时返回 `503`
   （带 `Retry-After: 2`）。
+
+#### 客户端证书认证（`auth.go`）
+
+`ClientAuth` 只在配了 `--client-ca` 时构造，为 `nil` 时整条链路与加这个功能之前
+完全一致。四个入口：
+
+- `LoadClientAuth(caFile, denyFile)` 读 CA 池与吊销名单。名单文件读不到、或者有
+  一行不合法都直接报错，不跳过：一份读不进来的吊销名单比没有名单更危险。
+- `(*ClientAuth) TLSConfig(certFile, keyFile)` 组装 `tls.Config`。
+- `(*ClientAuth) withClientCertAuth(next)` 是 HTTP 层闸门。
+- `Fingerprint(cert)` 给运维脚本用，算出的格式与吊销名单一致。
+
+两个关键取值：
+
+`ClientAuth` 用 `tls.VerifyClientCertIfGiven`，不用 `RequireAndVerifyClientCert`。
+标准库文档写的是两者都要求「发过来的证书必须有效」，区别只在没发证书时。取前者，
+没带证书的请求能走到 HTTP 层拿到说明页；取后者握手直接失败，浏览器只画它自己的
+错误页，我们连一句解释都插不进去。而「还没装证书」正是最常见的失败。
+
+闸门同时检查 `PeerCertificates` 非空与 `VerifiedChains` 非空。后者为空说明这条链
+没验过，宁可拒。`internal/server/auth_test.go` 里有一条用例专门钉这一点。
+
+EKU：实测标准库会拦。`extendedKeyUsage` 只有 `serverAuth` 的客户端证书在握手
+阶段就被拒，日志是 `x509: certificate specifies an incompatible key usage`。
+闸门里仍然自己查了一遍 `hasClientAuthEKU`，是为了让这条性质不依赖标准库的实现
+细节。没有 EKU 扩展的证书按 RFC 5280 视为可用于任何用途，所以只在「写了 EKU 但
+不含 `clientAuth`」时拒绝。
+
+吊销：标准库的 TLS 栈不做 CRL 与 OCSP 检查，所以用服务器侧的指纹名单。命中给
+`403` 并记日志。名单在启动时读一次，改完要重启。
+
+身份只进日志，不进请求上下文：页面级请求（不是 `/static/` 也不是 `/doc/*/res/`）
+记一条 `subject` 与 `serial`，子资源不记，否则一个阅读页几十个请求会把日志淹掉。
+日志里的 `subject` 与名单备注都过 `sanitizeMsg`，证书里的 CN 是外部输入。
 
 两套 CSP：正文路由必须放宽（包内 HTML 普遍自带内联 `<script>`，标签页切换靠它），
 主站严格。`nosniff` 与 `X-Frame-Options` 对正文同样有效，不需要放宽。
@@ -604,6 +644,11 @@ selftest.go 在进程内用 `net/http/httptest` 起测试服务，逐项验证�
 它会把 `IPRate` 设为 0（自检连打几十个请求，限流会误伤），把 `DebugHealth` 置真，
 并只为最小的那个包建一份语料分片（全量建库约 4 分钟，不适合放进自检）。
 
+客户端证书那几项不现造证书、也不起 TLS 监听：用 `NewClientAuth` 构造一个空 CA 池
+的闸门，再手工构造带 `tls.ConnectionState` 的请求打 `Handler`。自检的价值在于
+「什么都没装也能跑」，真实的握手、链校验与 EKU 拦截由 `internal/server` 的单元
+测试覆盖。
+
 ### web/ — 前端
 
 这个目录同时是一个 Go 包。`web.go` 用 `//go:embed` 把同目录的 HTML / CSS / JS
@@ -656,6 +701,7 @@ selftest.go 在进程内用 `net/http/httptest` 起测试服务，逐项验证�
 
 ```
 请求 -> withSecurityHeaders（安全头，含按路由选择的 CSP）
+     -> withClientCertAuth（仅在配了 client-ca 时：没证书 401、已吊销 403）
      -> withMethodGuard（非 GET/HEAD 返回 405）
      -> withRateLimit（/api/search、/api/grep 按 IP 限流，超出返回 429）
      -> withGate（降级或信号量满返回 503）
@@ -940,7 +986,7 @@ Release()（内存守卫每 5 秒可能调用）
 `incomplete` 等于 `truncated || timeout`，含义是扫描未覆盖全部范围，是进度信息。
 已有命中一条都不会丢。
 
-### GET /healthz — 健康检查（匿名）
+### GET /healthz — 健康检查
 
 ```json
 { "ok": true, "degraded": false, "memMB": 50, "memLevel": "normal" }
@@ -948,6 +994,9 @@ Release()（内存守卫每 5 秒可能调用）
 
 `memMB` 是向上取整到 50 MB 倍数的近似值，`memLevel` 是 `normal` / `high` / `critical`。
 降级时 `ok:false` 但 HTTP 仍是 `200`，因为降级是正常的保护状态，不该让容器重启。
+
+开了客户端证书认证之后这个接口也要证书，没有路径例外。探针与监控要带证书，
+或者把探针跑在容器内部用同一份证书。
 
 ### GET /debug/healthz — 详细指标（默认关闭）
 
@@ -1120,7 +1169,7 @@ Windows 上要注意 `bash` 这个名字。系统自带的 WSL 启动桩
 web_ics --selftest --doc-root <文档库目录>
 ```
 
-在进程内用 `net/http/httptest` 起测试服务，逐项断言。当前 56 项全 PASS，覆盖：
+在进程内用 `net/http/httptest` 起测试服务，逐项断言。当前 60 项全 PASS，覆盖：
 
 | 分组 | 覆盖内容 |
 |---|---|
@@ -1128,6 +1177,7 @@ web_ics --selftest --doc-root <文档库目录>
 | 目录 | 顶层非空、按 `node` 解析深链、按 `url` 反查深链、未知节点返回空链、大目录首次展开耗时 |
 | 正文 | 正文直出（断言 `Content-Type` 不含 `charset=utf-8`）、大小写不敏感回退、不存在资源 404、路径穿越 404 |
 | 安全 | 非 GET/HEAD 返回 405、安全头四项、正文路由 CSP 放宽且仍禁嵌套、超长检索词 400、错误响应不回显内部路径 |
+| 访问控制 | 客户端证书闸门：不带证书被拒、链未校验时被拒、带有效证书放行、吊销名单命中被拒 |
 | 缓存 | 静态资源 `no-cache`、首页外壳 `no-store`、接口响应 `no-store` |
 | 检索 | 融合检索、标题命中总数精确、首屏标题与正文混排、标题排在正文前、热查询耗时、精确匹配优先排序、分页零重叠且顺序稳定、标题按主题合并、限定单库、单库检索正文只扫本文档、领域过滤 |
 | 语料 | 建分片、只扫已建好的包、状态如实上报、命中不越界 |

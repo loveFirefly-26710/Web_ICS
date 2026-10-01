@@ -68,7 +68,9 @@ Derby + Aspose 共 190 个 jar / 266 MB 实现，自带 JRE，光常驻 JVM 就�
 - 大小写不敏感的资源查找。文档里 URL 的大小写与包内文件名大面积不一致
   （目录 URL 26.4%、正文内部引用 35.5% 只能靠忽略大小写命中），
   不处理会有大面积图片 404 和正文标签页「点不动」。
-- 内置 `--selftest`，不开浏览器、不开常驻服务就能验证二进制可用，当前 56 项全通过。
+- 内置 `--selftest`，不开浏览器、不开常驻服务就能验证二进制可用，当前 60 项全通过。
+- 可选的客户端证书认证（mTLS）。配一个客户端 CA 就只放行持有证书的客户端，
+  不需要用户名密码，也不需要额外的反向代理，见[开启客户端证书认证](#开启客户端证书认证)。
 - 内存自守。四档阈值加容器硬限兜底，压力下先释放缓存再降级，不让容器 OOM Kill。
 
 ## 环境依赖
@@ -191,8 +193,9 @@ ls /你的文档库目录/*.hdx /你的文档库目录/*.hwics 2>/dev/null | wc 
 ```bash
 # 1. 告诉 compose 文档库挂在哪。不用改 docker-compose.yml，写个 .env 就行：
 #      echo 'DOC_DIR=/你的/文档库目录' > .env
-#    端口默认是 8080:8080，所有网卡都监听。应用没有认证机制，测试期建议
-#    按 docker-compose.yml 里的注释改成 "127.0.0.1:8080:8080"，让反代去对外。
+#    端口默认是 8080:8080，所有网卡都监听。默认没有认证，测试期建议
+#    按 docker-compose.yml 里的注释改成 "127.0.0.1:8080:8080"，让反代去对外，
+#    或者按下面「开启客户端证书认证」那节配客户端证书。
 
 # 2. 拿镜像。二选一：
 #    a) 用 CI 推到 GHCR 的镜像（服务器上不用编译，推荐）
@@ -229,8 +232,8 @@ docker compose exec web_ics /app/web_ics --selftest --doc-root /docs
 docker stats --no-stream web_ics                       # 稳态约 190 MB，上限 500 MB
 ```
 
-> 要放到公网，必须在反向代理上加认证。本应用没有任何认证机制，
-> 直接暴露等于把内部文档公开。
+> 要放到公网有两条路：开[客户端证书认证](#开启客户端证书认证)，或者在反向代理上
+> 加一层认证。默认配置没有任何认证，直接暴露等于把内部文档公开。
 
 ### 服务器不能访问外网时
 
@@ -303,7 +306,124 @@ journalctl -u web_ics -f          # 看启动日志
   `/home` 下，`ProtectHome=yes` 会把它挡住。那就把文档库挪到 `/srv` 之类的位置，
   或者去掉这一行。
 - `--addr 127.0.0.1:8080` 是只听本机，由反向代理对外。直接写 `:8080` 会让所有网卡
-  都能访问，而应用没有认证机制，不要这么用。对外那一层要自己加认证。
+  都能访问，而默认没有认证，不要这么用。要么开[客户端证书认证](#开启客户端证书认证)，
+  要么让反向代理去认证。
+
+### 开启客户端证书认证
+
+默认情况下服务没有任何认证，谁连上谁就能看。配一个客户端 CA 之后，只有持有该 CA
+签发的证书的客户端能访问。没有用户名密码这一步，也没有登录页与会话 cookie，
+身份就是 TLS 握手本身，每次请求都验一遍。
+
+自己做一套内部 CA 就够，不需要额外服务。下面这套命令在 Linux 与 Windows 的
+Git Bash 里都能跑，两边都带 `openssl`。
+
+第一步，建一个 CA。CA 私钥不要放到服务器上，签发都在自己机器上做：
+
+```bash
+mkdir -p certs && cd certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 3650 \
+  -subj "/CN=我的文档站 CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
+```
+
+第二步，签服务器证书。`subjectAltName` 要写客户端实际访问用的地址，现代浏览器
+不看 CN：
+
+```bash
+cat > server.ext <<'EOF'
+subjectAltName=DNS:docs.example.com,IP:192.168.1.10
+extendedKeyUsage=serverAuth
+keyUsage=digitalSignature
+EOF
+
+openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
+  -subj "/CN=docs.example.com"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out server.crt -days 365 -extfile server.ext
+```
+
+第三步，给每台要访问的设备签一张客户端证书。`extendedKeyUsage` 必须是
+`clientAuth`，否则握手会被标准库拒掉：
+
+```bash
+cat > client.ext <<'EOF'
+extendedKeyUsage=clientAuth
+keyUsage=digitalSignature
+EOF
+
+openssl req -newkey rsa:2048 -nodes -keyout phone.key -out phone.csr \
+  -subj "/CN=我的手机"
+openssl x509 -req -in phone.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out phone.crt -days 365 -extfile client.ext
+```
+
+要装进浏览器还得打包成 PKCS#12：
+
+```bash
+openssl pkcs12 -export -out phone.pfx -inkey phone.key -in phone.crt \
+  -passout pass:自己定一个密码
+```
+
+第四步，配置服务。三个键，`client-ca` 是开关，不写它就是普通的 HTTP：
+
+```
+client-ca = ./certs/ca.crt
+tls-cert = ./certs/server.crt
+tls-key = ./certs/server.key
+```
+
+`client-ca` 里可以放多张 CA 证书，轮换 CA 时新旧并存就能平滑过渡。配了
+`client-ca` 却没配证书或私钥时服务直接拒绝启动，不会退化成「以为开了其实没开」。
+
+第五步，把 CA 与客户端证书装进系统，两边都要装：
+
+- CA 证书装进系统信任库，这样服务器证书不再报不受信任。Windows 双击 `ca.crt`，
+  选「安装证书」，位置选「受信任的根证书颁发机构」。Linux 放进
+  `/usr/local/share/ca-certificates/` 后跑 `update-ca-certificates`。
+- 客户端证书双击 `phone.pfx` 导入，需要第三步设的密码。Windows 会放进当前用户的
+  「个人」证书库。
+
+Firefox 用自己的证书库，不读系统库，要在「设置 → 隐私与安全 → 证书 → 查看证书」
+里再单独导入一次。
+
+第六步，验证。浏览器打开服务地址会弹出证书选择框，选完就进去了。命令行可以用
+`curl --cert phone.crt --key phone.key https://...`，或者
+`openssl s_client -connect 主机:端口 -cert phone.crt -key phone.key -CAfile ca.crt`。
+
+几个常见现象：
+
+| 现象 | 原因 |
+|---|---|
+| 页面显示「需要客户端证书」 | 浏览器没有可用的证书。CA 与客户端证书都装了吗，Firefox 是不是漏了单独导入 |
+| 浏览器报 `ERR_BAD_SSL_CLIENT_AUTH_CERT` | 证书不受信、已过期，或者用途不是 `clientAuth`。握手阶段就断了，服务端没有机会返回页面，具体原因在服务端日志里 |
+| 页面显示「证书已被吊销」 | 这张证书在吊销名单里 |
+| 浏览器一直不弹选择框 | 服务器证书本身不受信任时，有的浏览器会直接拒绝连接。先确认 CA 装好了 |
+
+吊销一张证书：把它的 SHA-256 指纹写进名单，一行一个。
+
+```bash
+openssl x509 -in phone.crt -noout -fingerprint -sha256
+# 输出形如 SHA256 Fingerprint=AB:CD:...，把冒号去掉、转小写填进去
+```
+
+```
+# certs/deny.txt
+sha256:abcdef... 我的旧手机
+```
+
+再配 `client-cert-deny = ./certs/deny.txt` 并重启。名单里有一行格式不对时服务会
+拒绝启动，不会静默忽略某一条。
+
+几件要知道的事：
+
+- `/healthz` 也要证书，没有例外。探针与监控要么带证书，要么把探针跑在容器内部
+  用同一份证书。留一个免认证的口子等于留一个能探测服务状态的入口。
+- 服务一旦开启这个功能就只提供 HTTPS，明文请求会被拒。反向代理仍然可以放在前面，
+  但那不再是必需的。
+- 服务不做证书热加载，换证书之后要重启。
+- 吊销名单也是启动时读一次，改完要重启。
 
 ### 建语料库
 
@@ -417,13 +537,18 @@ git push origin v0.2.0
 | `--ip-burst` | `20` | 每 IP 的突发容量 |
 | `--trust-proxy` | `false` | 信任 `X-Forwarded-For` 作为客户端 IP。只有前面挂了反代才该开，否则任何人都能伪造这个头绕过限流 |
 | `--debug-health` | `false` | 暴露 `/debug/healthz` 的详细指标（精确 RSS、缓存、在途请求） |
+| `--client-ca` | 空 | 信任的客户端 CA 证书（PEM）。填了就要求客户端证书，服务改用 HTTPS。见[开启客户端证书认证](#开启客户端证书认证) |
+| `--tls-cert` | 空 | 服务器证书（PEM）。配了 `--client-ca` 时必填 |
+| `--tls-key` | 空 | 服务器私钥（PEM）。配了 `--client-ca` 时必填 |
+| `--client-cert-deny` | 空 | 客户端证书吊销名单，每行一个 `sha256` 指纹 |
 | `--open` | Windows 上开，其它平台关 | 启动后用系统默认浏览器打开界面。Windows 上默认开是因为那边是双击即用的桌面工具；Linux 上默认关，那是服务器。`--open=false` 可关 |
 | `--selftest` | 关 | 运行内建自检后退出 |
 | `--version` | 关 | 打印版本后退出 |
 
 环境变量：`WEB_ICS_DOC_ROOT`、`WEB_ICS_CORPUS_DIR`、`WEB_ICS_ADDR`、`WEB_ICS_WEB_ROOT`、
 `WEB_ICS_MAX_CONCURRENCY`、`WEB_ICS_IP_RATE`、`WEB_ICS_IP_BURST`、`WEB_ICS_TRUST_PROXY`、
-`WEB_ICS_DEBUG_HEALTH`、`WEB_ICS_OPEN_BROWSER`、`GOMEMLIMIT`。
+`WEB_ICS_DEBUG_HEALTH`、`WEB_ICS_OPEN_BROWSER`、`WEB_ICS_TLS_CERT`、`WEB_ICS_TLS_KEY`、
+`WEB_ICS_CLIENT_CA`、`WEB_ICS_CLIENT_CERT_DENY`、`GOMEMLIMIT`。
 
 同一个设置可以在四个地方给，优先级是命令行参数 > 环境变量 > 配置文件 > 内置默认值。
 
@@ -660,7 +785,9 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 - 批注与笔记（`docnote`）
 - Office 在线预览与导出（原版最大的重依赖，且这批文档里 Office 附件几乎为 0）
 - 打印导出、版本对比、下载任务管理、虚拟文件夹
-- 用户体系、证书校验、隐私声明（原版那串 filter 是给企业内网合规用的）
+- 用户体系（用户名密码、角色、按人授权）、隐私声明（原版那串 filter 是给企业内网
+  合规用的）。访问控制只做客户端证书这一种，做了就不配证书等于没开，见
+  [开启客户端证书认证](#开启客户端证书认证)
 - 任何写操作。服务是只读的，没有写接口
 
 ## 相关文档

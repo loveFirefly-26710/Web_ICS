@@ -45,6 +45,10 @@ var settings = []setting{
 	{"ip-burst", "WEB_ICS_IP_BURST", "int", false},
 	{"trust-proxy", "WEB_ICS_TRUST_PROXY", "bool", false},
 	{"debug-health", "WEB_ICS_DEBUG_HEALTH", "bool", false},
+	{"tls-cert", "WEB_ICS_TLS_CERT", "string", true},
+	{"tls-key", "WEB_ICS_TLS_KEY", "string", true},
+	{"client-ca", "WEB_ICS_CLIENT_CA", "string", true},
+	{"client-cert-deny", "WEB_ICS_CLIENT_CERT_DENY", "string", true},
 	{"open", "WEB_ICS_OPEN_BROWSER", "bool", false},
 }
 
@@ -342,6 +346,15 @@ const configTemplate = `# Web_ICS 配置文件
 # 监听地址与端口。addr 写了就忽略 port。
 # addr = 127.0.0.1:8080
 # port = 8080
+
+# 客户端证书认证。client-ca 是开关：不写就是普通的 HTTP，谁都能访问。
+# 写了它就要求客户端证书，服务改用 HTTPS，同时必须配上服务器证书与私钥。
+# 签发与安装步骤见 README 的「开启客户端证书认证」一节。
+# client-ca = ./certs/ca.crt
+# tls-cert = ./certs/server.crt
+# tls-key = ./certs/server.key
+# 吊销名单可选，一行一个 sha256 指纹。去掉某张证书的访问权就把它填进来。
+# client-cert-deny = ./certs/deny.txt
 
 # 下面这些一般不用改，完整说明见 README 的参数表。
 # max-concurrency = 10

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -615,17 +619,17 @@ func runSelfTest(docRoot string) int {
 	}
 
 	// 15. 大目录解析（挑节点最多的包）
-	big := libs[0]
+	bigLib := libs[0]
 	for _, l := range libs {
-		if l.TopicNumber > big.TopicNumber {
-			big = l
+		if l.TopicNumber > bigLib.TopicNumber {
+			bigLib = l
 		}
 	}
 	t1 := time.Now()
-	code, body, _ = get("/api/nav?lib=" + big.LibID + "&parent=")
+	code, body, _ = get("/api/nav?lib=" + bigLib.LibID + "&parent=")
 	elapsed := time.Since(t1)
-	check("大目录首次展开 "+truncStr(big.LibName, 18), code == 200 && elapsed < 5*time.Second,
-		fmt.Sprintf("status=%d 耗时=%v 节点数=%d", code, elapsed.Round(time.Millisecond), big.TopicNumber))
+	check("大目录首次展开 "+truncStr(bigLib.LibName, 18), code == 200 && elapsed < 5*time.Second,
+		fmt.Sprintf("status=%d 耗时=%v 节点数=%d", code, elapsed.Round(time.Millisecond), bigLib.TopicNumber))
 
 	// 16. 正文语料库：建 -> 开 -> 扫 -> 取摘要，整条链路
 	//
@@ -692,6 +696,52 @@ func runSelfTest(docRoot string) int {
 	check("语料命中全部来自已建索引的包",
 		csOK && foreign == 0 && contentN > 0 && cs.Content.Matched > 0,
 		fmt.Sprintf("正文命中=%d 越界=%d matched=%d", contentN, foreign, cs.Content.Matched))
+
+	// 客户端证书认证：只验闸门的四条判断。
+	//
+	// 不起真 TLS 监听，也不现造证书：自检的价值在于「什么都没装也能跑」。
+	// 这里直接构造带 TLS 状态的请求打 Handler。真实的握手、链校验与 EKU
+	// 拦截由 internal/server 的单元测试覆盖。
+	{
+		leaf := &x509.Certificate{
+			Subject:      pkix.Name{CommonName: "selftest"},
+			SerialNumber: big.NewInt(1),
+			Raw:          []byte("selftest-cert"),
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+		verified := &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{leaf},
+			VerifiedChains:   [][]*x509.Certificate{{leaf}},
+		}
+		// 带了证书但链没验过（VerifiedChains 为空）时同样要拒。
+		unverified := &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{leaf},
+		}
+
+		authCfg := server.DefaultConfig()
+		authCfg.DebugHealth = true
+		authCfg.IPRate = 0
+
+		status := func(deny string, state *tls.ConnectionState) int {
+			ca, err := server.NewClientAuth(nil, deny)
+			if err != nil {
+				return -1
+			}
+			authCfg.ClientAuth = ca
+			h := server.New(authCfg, index, nav.NewCache(), nil).Handler()
+			req := httptest.NewRequest(http.MethodGet, "/api/libs", nil)
+			req.TLS = state
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec.Code
+		}
+
+		check("客户端证书：不带证书被拒", status("", nil) == http.StatusUnauthorized, "")
+		check("客户端证书：链未校验时被拒", status("", unverified) == http.StatusUnauthorized, "")
+		check("客户端证书：带有效证书放行", status("", verified) == http.StatusOK, "")
+		check("客户端证书：吊销名单命中被拒",
+			status("sha256:"+server.Fingerprint(leaf)+"\n", verified) == http.StatusForbidden, "")
+	}
 
 	fmt.Println()
 	if fail == 0 {

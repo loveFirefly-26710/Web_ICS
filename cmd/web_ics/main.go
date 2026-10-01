@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -61,6 +62,16 @@ func main() {
 			"信任 X-Forwarded-For 作为客户端 IP（只有前面挂了反代才该开）")
 		debugHealth = flag.Bool("debug-health", false,
 			"暴露 /debug/healthz 详细指标（默认关闭）")
+		// ---- 客户端证书认证（ADR-17）----
+		// 四个键里 client-ca 是唯一的开关：不配它就是原来的裸 HTTP。
+		tlsCert = flag.String("tls-cert", "",
+			"服务器证书 PEM。配了 client-ca 时必填")
+		tlsKey = flag.String("tls-key", "",
+			"服务器私钥 PEM。配了 client-ca 时必填")
+		clientCA = flag.String("client-ca", "",
+			"信任的客户端 CA 证书 PEM（可含多张）。配了就要求客户端证书，服务改用 HTTPS")
+		clientCertDeny = flag.String("client-cert-deny", "",
+			"客户端证书吊销名单，每行一个 sha256 指纹")
 		// Windows 上默认开：这个平台上它是双击即用的桌面工具，不开浏览器
 		// 用户还得自己找地址。Linux 上默认关，那边是服务器，多半没有桌面环境。
 		// 环境变量 WEB_ICS_OPEN_BROWSER 与配置文件里的 open 都能覆盖它。
@@ -83,6 +94,33 @@ func main() {
 	cf := loadConfig(*configPath)
 	applySettings(cf)
 	cf.logSummary()
+
+	// ---- 客户端证书认证 ----
+	//
+	// client-ca 是唯一的开关。配了它却没配证书文件就直接退出，不退化成
+	// 「以为开了其实没开」。这段刻意放在扫描文档库之前：证书配错了要立刻
+	// 知道，而不是等语料建到一半才失败。
+	var clientAuth *server.ClientAuth
+	var tlsCfg *tls.Config
+	if *clientCA != "" {
+		if *tlsCert == "" || *tlsKey == "" {
+			log.Fatalf("配了 client-ca 就必须同时配 tls-cert 与 tls-key")
+		}
+		ca, err := server.LoadClientAuth(*clientCA, *clientCertDeny)
+		if err != nil {
+			log.Fatalf("加载客户端证书配置失败: %v", err)
+		}
+		clientAuth = ca
+		tc, err := ca.TLSConfig(*tlsCert, *tlsKey)
+		if err != nil {
+			log.Fatalf("加载服务器证书失败: %v", err)
+		}
+		tlsCfg = tc
+		log.Printf("客户端证书认证已启用（CA: %s），服务走 HTTPS", *clientCA)
+		if *clientCertDeny != "" {
+			log.Printf("客户端证书吊销名单: %s", *clientCertDeny)
+		}
+	}
 
 	if *selfTest {
 		printEnv(*docRoot, cf)
@@ -167,6 +205,7 @@ func main() {
 	cfg.IPBurst = *ipBurst
 	cfg.TrustProxy = *trustProxy
 	cfg.DebugHealth = *debugHealth
+	cfg.ClientAuth = clientAuth
 	if *addr == "" {
 		*addr = fmt.Sprintf(":%d", *port)
 	}
@@ -189,11 +228,16 @@ func main() {
 		*softM, *hardM, *panicM)
 
 	// ---- 启动 HTTP 服务 ----
-	httpSrv := server.NewHTTPServer(cfg.Addr, srv.Handler())
+	httpSrv := server.NewHTTPServer(cfg.Addr, srv.Handler(), tlsCfg)
 
 	go func() {
 		log.Printf("监听 %s", cfg.Addr)
-		uiURL := "http://127.0.0.1" + portSuffix(cfg.Addr)
+		// 开了客户端证书认证就走 https，否则浏览器会被开到连不上的地址上。
+		scheme := "http"
+		if tlsCfg != nil {
+			scheme = "https"
+		}
+		uiURL := scheme + "://127.0.0.1" + portSuffix(cfg.Addr)
 		log.Printf("打开浏览器访问 %s", uiURL)
 		if *openUI {
 			// 稍等一下再开，免得浏览器抢在 ListenAndServe 之前发请求。
@@ -205,7 +249,14 @@ func main() {
 				}
 			}()
 		}
-		if err := httpSrv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
+		var err error
+		if tlsCfg != nil {
+			// 证书已经在 tlsCfg.Certificates 里，不用再传文件名。
+			err = httpSrv.ListenAndServeTLS("", "")
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err.Error() != "http: Server closed" {
 			log.Fatalf("HTTP 服务异常: %v", err)
 		}
 	}()

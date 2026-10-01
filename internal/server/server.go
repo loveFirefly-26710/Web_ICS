@@ -34,6 +34,10 @@ type Config struct {
 	IPRate      float64 // 每 IP 每秒允许的请求数，<=0 关闭限流
 	IPBurst     int     // 每 IP 的突发容量
 	TrustProxy  bool    // 是否信任 X-Forwarded-For（配了反代才开）
+
+	// ClientAuth 非空时要求客户端证书。nil 表示不启用，行为与加这个功能之前
+	// 完全一致。构造见 auth.go。
+	ClientAuth *ClientAuth
 }
 
 // DefaultConfig 返回面向 1G 机器的默认配置。
@@ -120,8 +124,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/doc", s.handleDoc) // /doc 与 /doc/{libId} 无斜杠形式
 	mux.HandleFunc("/", s.handleStatic)
 	// 顺序有讲究：安全头放最外层，这样限流的 429、闸门的 503、方法拒绝的
-	// 405 也带上头；方法判断在限流之前，非 GET 请求不消耗限流配额。
-	return withSecurityHeaders(withMethodGuard(s.withRateLimit(s.withGate(mux))))
+	// 405、以及客户端证书的 401 与 403 也带上头；方法判断在限流之前，非 GET
+	// 请求不消耗限流配额；客户端证书闸门排在方法、限流、闸门外面，未认证的
+	// 请求不消耗并发槽位与限流配额。
+	inner := withMethodGuard(s.withRateLimit(s.withGate(mux)))
+	if s.cfg.ClientAuth != nil {
+		inner = s.cfg.ClientAuth.withClientCertAuth(inner)
+	}
+	return withSecurityHeaders(inner)
 }
 
 // ---------------------------------------------------------------- middleware
