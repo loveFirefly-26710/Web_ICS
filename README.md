@@ -392,6 +392,19 @@ tls-key = ./certs/server.key
 Firefox 用自己的证书库，不读系统库，要在「设置 → 隐私与安全 → 证书 → 查看证书」
 里再单独导入一次。
 
+如果双击导入后浏览器弹出证书选择框、框里也有你的证书，但点「确定」没反应，多半是
+私钥被装进了老式的加密提供程序。先删掉旧的，再用 certutil 指定现代密钥存储重新
+导入一次：
+
+```
+certutil -user -delstore My <旧证书的 SHA-1 指纹>
+certutil -user -csp KSP -p <pfx 密码> -importPFX My "<pfx 完整路径>" NoRoot,NoProtect
+```
+
+导入后 `certutil -user -store My` 里的「提供程序」应当是
+`Microsoft Software Key Storage Provider`。指纹可以从同一条命令的输出里看，
+也可以用 `openssl x509 -in phone.crt -noout -fingerprint -sha1`。
+
 第六步，验证。浏览器打开服务地址会弹出证书选择框，选完就进去了。命令行可以用
 `curl --cert phone.crt --key phone.key https://...`，或者
 `openssl s_client -connect 主机:端口 -cert phone.crt -key phone.key -CAfile ca.crt`。
