@@ -1315,9 +1315,13 @@ printf 'GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n' |
 证书库这一侧用 `certutil` 查。它的输出是 GBK，管道里要
 `| iconv -f GBK -t UTF-8`，`grep` 要带 `-a`（不加会说 Binary file matches）：
 
-- `certutil -user -store My`：个人库里有哪几张证书、各用哪个密钥提供程序
+- `certutil -user -store My`：当前用户的个人库，有哪几张证书、各用哪个密钥提供程序
+- `certutil -store My`：本地计算机的个人库，**要单独查**。同名证书两边各有一份时，
+  浏览器可能挑到错的那张，表现就是「选择框里有证书、点确定没反应」
 - `certutil -store Root`：本地计算机的受信任根里有没有你的 CA
-- `certutil -user -store Root`：当前用户的受信任根里有没有
+- `certutil -user -store Root`：当前用户的受信任根里有没有（Chromium 系可能读用户库）
+
+同名证书只留一张，两个库都要看一眼。装到哪个库都行，但别两边都装。
 
 证书在库里、有私钥、用途也对，命令行也能过，那重点就转向浏览器本身，不要再动证书。
 
