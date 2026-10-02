@@ -1285,6 +1285,42 @@ printf 'GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n' |
 （`openssl pkcs12 -export -out alice.pfx -inkey alice.key -in alice.crt`）。
 Firefox 用自己的证书库，要单独导一次。
 
+#### 分清是浏览器侧还是服务端侧
+
+客户端证书出问题时，两侧的现象长得一样（页面都是 401，或者干脆握手失败）。
+先做两个便宜的隔离实验，别先猜。这是踩过一轮之后总结的顺序。
+
+第一步，用命令行证明服务端是好的。带上证书用 `openssl s_client` 打一次，拿到 200
+就说明服务端、CA、证书本身都没问题：
+
+```bash
+printf 'GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n' |
+  openssl s_client -connect 127.0.0.1:8443 -CAfile /tmp/certs/ca.crt \
+    -verify_return_error -quiet -cert /tmp/certs/alice.crt -key /tmp/certs/alice.key \
+    2>&1 | grep -m1 -o 'HTTP/1\.[01] [0-9]*'
+```
+
+第二步，换一个浏览器对照。同一张证书、同一个地址，换一个浏览器能进，问题就在原来
+那个浏览器那一侧。实测过 Edge 会出现「证书选择框弹出来了、里面也有证书、点确定没
+反应」，同一环境换 Chrome 就正常。做这个对照之前先确认他用的是哪个浏览器
+（`tasklist | iconv -f GBK -t UTF-8 | grep -iaE 'msedge|chrome|firefox'`），
+不然容易开错药方。
+
+第三步，点确定的同时盯服务端日志。三种结果指向完全不同的方向：
+
+- 出现 `[auth] 通过 subject=...`：认证其实过了，问题在后面的环节
+- 出现 `TLS handshake error ...`：证书发出来了但服务端不认，那行里带着原因
+- 什么都没有：证书根本没发出去，问题在浏览器或证书库这一侧
+
+证书库这一侧用 `certutil` 查。它的输出是 GBK，管道里要
+`| iconv -f GBK -t UTF-8`，`grep` 要带 `-a`（不加会说 Binary file matches）：
+
+- `certutil -user -store My`：个人库里有哪几张证书、各用哪个密钥提供程序
+- `certutil -store Root`：本地计算机的受信任根里有没有你的 CA
+- `certutil -user -store Root`：当前用户的受信任根里有没有
+
+证书在库里、有私钥、用途也对，命令行也能过，那重点就转向浏览器本身，不要再动证书。
+
 ### 三、命令行核验清单
 
 ```bash
