@@ -1,0 +1,570 @@
+/* Web_ICS 阅读器：浅色主题，无外部依赖 */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e3e6ea;
+  --border-strong: #d0d5dc;
+  --text: #1f2328;
+  --text-dim: #656d76;
+  --text-faint: #8b949e;
+  --accent: #0b62d0;
+  --accent-soft: #e8f1fd;
+  --hover: #f0f2f5;
+  --warn: #b26a00;
+  --danger: #c0392b;
+  --topbar-h: 52px;
+  --side-w: 320px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------------- 顶栏 ---------------- */
+.topbar {
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.brand { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
+a.brand { padding: 4px 6px; border-radius: 4px; margin-left: -6px; }
+a.brand:hover { background: var(--hover); text-decoration: none; }
+.brand-mark {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: .06em;
+  color: var(--accent);
+}
+.brand-text { font-weight: 500; font-size: 14px; color: var(--text-dim); }
+
+.topbar-search {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/* 文档页顶栏更挤（面包屑 + 导航按钮 + 内存指标），
+   给搜索框一个可控上限，避免把面包屑挤没。
+   注意用 flex 基准而非固定宽：窄屏时它会先收缩，而不是把别的元素顶出去。 */
+.viewer .topbar-search { flex: 0 1 340px; max-width: 340px; margin-left: 12px; }
+.viewer .topbar-search input[type="search"] { flex: 1 1 auto; min-width: 0; }
+.viewer .crumb { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.search-hint { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+.meta.warn { color: var(--warn); }
+.meta.danger { color: var(--danger); font-weight: 600; }
+
+.back {
+  font-size: 18px;
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.back:hover { background: var(--hover); text-decoration: none; }
+
+.crumb {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.crumb .sep { margin: 0 6px; color: var(--text-faint); }
+.crumb .cur { color: var(--text); font-weight: 500; }
+
+/* ---------------- 首页 ---------------- */
+#q {
+  width: 100%;
+  max-width: 520px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  background: var(--panel);
+}
+#q:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+.home-layout {
+  display: flex;
+  align-items: flex-start;
+  height: calc(100vh - var(--topbar-h));
+  overflow: hidden;
+}
+
+/* 左侧产品领域导航 */
+.catnav {
+  width: 216px;
+  flex: 0 0 216px;
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 10px 0 40px;
+}
+.catnav-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: .06em;
+  padding: 4px 16px 8px;
+}
+.catlist { list-style: none; margin: 0; padding: 0; }
+.catitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-left: 2px solid transparent;
+}
+.catitem:hover { background: var(--hover); color: var(--text); }
+.catitem.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+.catname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catcount {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--hover);
+  border-radius: 9px;
+  padding: 1px 7px;
+}
+.catitem.active .catcount { background: #fff; color: var(--accent); }
+.cat-loading { padding: 8px 16px; color: var(--text-faint); font-size: 12px; }
+
+/* 右侧库列表 */
+.libmain { flex: 1 1 auto; min-width: 0; height: 100%; overflow: auto; padding: 14px 18px 60px; }
+
+.libmain-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.list-title { font-size: 15px; font-weight: 600; margin: 0; }
+.status { color: var(--text-faint); font-size: 12px; }
+
+/* 表格布局：与原版阅读器的列结构一致
+   名称 / 产品版本 / 文档版本 / 日期 */
+.libtable {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lthead, .librow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px 100px 110px;
+  align-items: center;
+}
+
+.lthead {
+  background: #fafbfc;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  height: 34px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.th {
+  padding: 0 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.th[data-sort] { cursor: pointer; user-select: none; }
+.th[data-sort]:hover { color: var(--accent); }
+/* 排序箭头：与原版一致，默认显示上/下双箭头 */
+.th[data-sort]::after { content: " ⇅"; color: var(--text-faint); font-size: 10px; }
+.th.asc::after { content: " ↑"; color: var(--accent); }
+.th.desc::after { content: " ↓"; color: var(--accent); }
+
+.librow {
+  min-height: 40px;
+  border-bottom: 1px solid #f0f2f5;
+  cursor: pointer;
+  font-size: 13px;
+}
+.librow:last-child { border-bottom: 0; }
+.librow:hover { background: var(--accent-soft); }
+
+.td {
+  padding: 8px 10px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.td-name { display: flex; align-items: center; gap: 8px; }
+.lthead .th:first-child, .librow .td:first-child { padding-left: 12px; }
+.docicon {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 16px;
+  border: 1px solid #9aa4b0;
+  border-radius: 2px;
+  position: relative;
+  background: #fff;
+}
+.docicon::before {
+  content: "";
+  position: absolute;
+  left: 2px; right: 2px; top: 4px;
+  height: 1px;
+  background: #c3cad3;
+  box-shadow: 0 3px 0 #c3cad3, 0 6px 0 #c3cad3;
+}
+.docname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.td-ver, .td-docver, .td-date { color: var(--text-dim); }
+.td-docver, .td-date { font-variant-numeric: tabular-nums; }
+
+/* 列表 / 搜索结果为空时的占位文本块。
+   注意：类名不要用 .empty，目录树的折叠箭头是 .twisty.empty，
+   撞上这里的 padding 会把叶子节点撑高。 */
+.blank {
+  padding: 28px 16px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+/* 搜索失败时的可操作提示，弱化但可读 */
+.fail-hint { display: inline-block; margin-top: 6px; color: var(--text-dim); font-size: 12px; }
+
+/* ---------------- 搜索结果 ---------------- */
+
+.searchpane-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+/* 检索是单一入口：一次查询同时打标题与正文，没有「范围」下拉可调，
+   这里只放一个标题与状态行。 */
+.search-title { font-size: 14px; font-weight: 600; margin: 0; color: var(--text); }
+
+/* 覆盖范围提示：必须让用户看得见正文检索覆盖了哪些文档包，
+   否则「正文只搜了一部分」会被误读成「搜索不覆盖全部文档」。 */
+.search-hint {
+  margin: -4px 0 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.searchresults { display: flex; flex-direction: column; gap: 0; }
+
+.sr {
+  display: block;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f2f5;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  color: var(--text);
+}
+.searchresults > .sr:first-child { border-radius: 4px 4px 0 0; }
+.searchresults > .sr:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 4px 4px; }
+.searchresults > .sr:only-child { border-radius: 4px; }
+.sr:hover { background: var(--accent-soft); text-decoration: none; }
+
+/* 标题命中的条目左侧加一道色条，与正文命中区分开。
+   原版靠排序体现"标题优先"，我们再额外给一个视觉标记，
+   让用户一眼看出这条为什么排在前面。 */
+.sr-title-hit { border-left: 3px solid var(--accent); }
+.sr-content { border-left: 3px solid #c9cdd4; }
+
+.sr-title { font-size: 13.5px; font-weight: 600; color: var(--accent); line-height: 1.5; }
+
+/* 来源标记（标题 / 正文） */
+.sr-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  padding: 0 5px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: 1px;
+}
+.sr-tag-title { background: var(--accent); color: #fff; }
+.sr-tag-content { background: #eceff3; color: var(--text-dim); }
+
+.sr-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-snippet {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.7;
+  margin-top: 5px;
+  word-break: break-word;
+}
+
+/* 「标题命中但正文里没有检索词」时给的是文档开头一段，
+   不是命中上下文，颜色压淡一点，别让人误以为这里有高亮命中。
+   同时限高，避免长文档的开头把列表撑散。 */
+.sr-snippet-lead {
+  color: var(--text-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 同主题被多个文档包收录时列出的包清单。
+   对齐原版 getMergeItemHtml：一个主题一张卡片，卡片内列出全部收录包。 */
+.sr-groups {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line, #e5e7eb);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.sr-groups-label { display: block; margin-bottom: 3px; }
+.sr-groups ul {
+  margin: 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+.sr-groups li { line-height: 1.75; }
+.sr-groups a { color: var(--text-dim); text-decoration: none; }
+.sr-groups a:hover { color: var(--accent); text-decoration: underline; }
+.sr-snippet em, .sr-title em {
+  font-style: normal;
+  font-weight: 700;
+  color: #d33;
+  background: #fff3cd;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* ---------------- 分页 ---------------- */
+
+/* 用分页替代「截断」：原版也是靠翻页看更多结果，
+   而不是「取够一部分就停」。 */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 2px;
+}
+.pgbtn {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.pgbtn:hover:not(.pgbtn-off) { background: var(--accent-soft); border-color: var(--accent); }
+.pgbtn-off { color: var(--text-faint); cursor: default; opacity: .55; }
+.pginfo { font-size: 12.5px; color: var(--text-dim); padding: 0 4px; }
+
+/* ---------------- 阅读页 ---------------- */
+.layout {
+  display: flex;
+  height: calc(100vh - var(--topbar-h));
+  overflow: hidden;
+}
+
+.sidebar {
+  width: var(--side-w);
+  flex: 0 0 auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar.hidden { display: none; }
+
+.side-head {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.side-title { font-size: 12px; font-weight: 600; color: var(--text-dim); letter-spacing: .04em; }
+
+.mini {
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 7px;
+}
+.mini:hover { background: var(--hover); color: var(--text); }
+
+.side-filter {
+  flex: 0 0 auto;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.side-filter input {
+  width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+.side-filter input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+.tree { overflow: auto; flex: 1 1 auto; padding: 6px 4px 40px; }
+
+.node {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.45;
+  user-select: none;
+}
+.node:hover { background: var(--hover); }
+.node.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+
+.twisty {
+  flex: 0 0 14px;
+  width: 14px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 10px;
+  transition: transform .12s;
+  transform-origin: center;
+  margin-top: 3px;
+}
+.twisty.open { transform: rotate(90deg); }
+.twisty.empty { visibility: hidden; }
+
+.label { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+
+/* 嵌套层级的缩进靠 kids 的 padding 累积 */
+.kids { padding-left: 14px; }
+
+.tree-loading, .tree-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.node.filtered-out { display: none; }
+
+/* 可拖动分栏 */
+.splitter {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background .12s;
+}
+.splitter:hover, .splitter.dragging { background: var(--accent-soft); }
+
+/* .content 是 iframe 的容器，也是文档页搜索面板的定位基准：
+   搜索面板绝对定位覆盖在正文之上，不离开当前文档。 */
+.content { flex: 1 1 auto; min-width: 0; background: #fff; position: relative; }
+#frame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+
+/* 文档页搜索结果面板：覆盖正文，可滚动。不遮挡顶栏，
+   因此用户随时能改搜索词或关掉面板回到原文。 */
+.docpane {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #fff;
+  overflow: auto;
+  padding: 14px 18px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+.docpane .searchpane-head { margin-bottom: 12px; }
+.docpane #btn-close-search { margin-left: auto; }
+.docpane .pager { margin-top: 14px; }
+
+.navbtn {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 5px 9px;
+  /* 顶栏是 flex 容器，按钮默认 flex-shrink:1 会被压缩：宽度紧张时
+     「搜索」两个字会被挤成竖排。按钮在任何宽度下都该保持内容宽度。 */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.navbtn:hover { background: var(--hover); color: var(--text); border-color: var(--accent); }
+.navbtn:active { background: var(--accent-soft); }
+.navbtn.icon { padding: 5px 8px; min-width: 28px; text-align: center; }
+
+/* 窄屏：侧栏浮层化 */
+@media (max-width: 980px) {
+  .lthead, .librow { grid-template-columns: minmax(0, 1fr) 130px 90px; }
+  .td-date, .th-date { display: none; }
+}
+@media (max-width: 860px) {
+  .catnav { display: none; }
+  .lthead, .librow { grid-template-columns: minmax(0, 1fr) 120px; }
+  .td-docver, .th-docver { display: none; }
+}
+@media (max-width: 720px) {
+  .sidebar { position: absolute; z-index: 10; height: 100%; box-shadow: 2px 0 12px rgba(0,0,0,.12); }
+  .splitter { display: none; }
+  .lthead, .librow { grid-template-columns: minmax(0, 1fr); }
+  .td-ver, .th-ver { display: none; }
+}

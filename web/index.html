@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web_ICS 产品文档</title>
+<link rel="stylesheet" href="/static/style.css?v=21">
+</head>
+<body class="home">
+
+<header class="topbar">
+  <a class="brand" href="/" title="返回首页">
+    <span class="brand-mark">Web_ICS</span>
+    <span class="brand-text">产品文档</span>
+  </a>
+  <div class="topbar-search">
+    <input id="q" type="search" placeholder="搜索文档（标题 / 正文）…" autocomplete="off"
+           autofocus>
+    <button id="btn-search" class="navbtn" title="搜索">搜索</button>
+  </div>
+  <div class="topbar-right">
+    <span id="meta" class="meta"></span>
+    <span id="mem" class="meta" title="进程内存占用"></span>
+  </div>
+</header>
+
+<div class="home-layout">
+  <aside class="catnav" id="catnav">
+    <div class="catnav-head">产品领域</div>
+    <ul id="catlist" class="catlist">
+      <li class="cat-loading">加载中…</li>
+    </ul>
+  </aside>
+
+  <main class="libmain">
+    <!-- 搜索结果面板：默认隐藏，有查询词时显示 -->
+    <section id="searchPane" class="searchpane" hidden>
+      <div class="searchpane-head">
+        <!-- 单一检索：一个输入框一次查询，同时打标题与正文，标题命中靠权重
+             排在前面。因此这里不提供"检索范围"下拉：那会让用户以为要自己
+             选一种搜法，而范围其实由页面上下文决定。 -->
+        <h2 class="search-title">搜索结果</h2>
+        <span id="searchStat" class="status"></span>
+      </div>
+      <!-- 覆盖范围提示：如实说明正文检索覆盖了哪些文档包。
+           语料库就绪时是一次查询覆盖全库，仍在后台建立时显示「已就绪 X/N」。 -->
+      <div id="searchHint" class="search-hint" hidden></div>
+      <div id="searchResults" class="searchresults"></div>
+      <div id="searchPager" class="pager" hidden></div>
+    </section>
+
+    <!-- 文档库列表 -->
+    <section id="listPane">
+      <div class="libmain-head">
+        <h1 id="listTitle" class="list-title">全部文档库</h1>
+        <div id="status" class="status"></div>
+      </div>
+
+      <div class="libtable" id="libtable">
+        <div class="lthead">
+          <span class="th th-name" data-sort="libName">文档包名称</span>
+          <span class="th th-ver" data-sort="productVersion">产品版本</span>
+          <span class="th th-docver" data-sort="libVersion">文档版本</span>
+          <span class="th th-date" data-sort="issueDate">日期</span>
+        </div>
+        <div id="librows" class="librows"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/mem.js?v=21"></script>
+<script src="/static/home.js?v=21"></script>
+</body>
+</html>

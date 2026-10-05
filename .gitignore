@@ -1,0 +1,29 @@
+# 构建产物
+dist/
+*.exe
+# 前导斜杠必须有：`web_ics` 不带斜杠是「任意层级同名」的匹配，会把
+# cmd/web_ics/ 整个目录一起忽略掉，入口文件静默进不了仓库。
+/web_ics
+/web_ics-linux-*
+
+# Go 构建与测试产物
+*.test
+*.out
+
+# 正文语料库：约 1.8 GB，可由 --build-corpus 随时重建
+.web_ics-corpus/
+
+# 本地临时文件
+tmp/
+*.log
+
+# docker compose 读的环境变量，里面通常是本机的文档库路径，不要提交
+.env
+
+# 编辑器与本地工具状态
+.vscode/
+.idea/
+.workbuddy-ai/
+
+# 首次提交的信息文件，配合 git commit -F 用，不进仓库
+/FIRST_COMMIT.txt

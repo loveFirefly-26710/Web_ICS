@@ -1,0 +1,29 @@
+# 构建产物与本地文件，不进镜像
+dist/
+*.exe
+*.log
+.git/
+.gitignore
+# 里面有本机的文档库路径，只给 docker compose 用，不是构建输入
+.env
+
+# 文档库绝不进镜像：运行期只读挂载
+# （若你把文档库放在项目内，取消下一行注释并改成你的目录名）
+# docs/
+
+# 正文语料库：约 1.8 GB，运行期用 --build-corpus 在挂载卷上重建，
+# 不要打进镜像
+.web_ics-corpus/
+
+# 说明文档不是构建输入，不进构建上下文
+docs/
+*.md
+
+# 发布相关，容器构建不需要
+.github/
+
+# 开发工具与本地状态
+.workbuddy-ai/
+.vscode/
+.idea/
+tmp/

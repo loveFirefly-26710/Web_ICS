@@ -1,0 +1,92 @@
+# Web_ICS：Docker Compose 部署
+#
+# 面向 2 核 2G 服务器：阅读器内存硬顶 500MB，留 1.5G 给系统与其他服务。
+#
+# 用法（服务器，用 CI 推到 GHCR 的镜像）：
+#   1. 把下面 volumes 里文档库那行改成宿主机上的实际路径
+#   2. docker compose pull && docker compose up -d
+#   3. 浏览器访问 http://<服务器IP>:8080
+#
+# 用法（本地，自己构建）：
+#   docker compose build && docker compose up -d
+#
+# 要放到公网：本应用没有任何认证机制，直接暴露等于把内部文档公开。
+# 请在前面加一层反向代理做认证与限流。
+
+services:
+  web_ics:
+    # image 必须写全路径。服务器上的 docker compose pull 按这个地址去拉 CI 推上来的
+    # 镜像；写成 web_ics:latest 只会在本地找，永远拉不到新版本。
+    # build 段留给本地：docker compose build 会构建出同名镜像，本机用法不变。
+    image: ghcr.io/lovefirefly-26710/web_ics:latest
+    build: .
+    container_name: web_ics
+    restart: unless-stopped
+
+    ports:
+      # 只给内网或本机用就改成 "127.0.0.1:8080:8080"，让反代去对外
+      - "8080:8080"
+
+    environment:
+      # Go 运行时软内存上限：低于容器硬限，让 GC 提前回收。
+      # 不设这个，Go 会按宿主机总内存决定 GC 时机，一路涨到被 OOM Kill。
+      GOMEMLIMIT: "300MiB"
+      # 在途请求上限。2 核机器上不要超过 16
+      WEB_ICS_MAX_CONCURRENCY: "10"
+      TZ: Asia/Shanghai
+      # 每 IP 限流。前面挂了反代就把 WEB_ICS_TRUST_PROXY 设 1，
+      # 否则所有请求看起来都来自反代那一个 IP，会互相挤占配额。
+      WEB_ICS_IP_RATE: "5"
+      WEB_ICS_IP_BURST: "20"
+      # WEB_ICS_TRUST_PROXY: "1"
+
+    volumes:
+      # 文档库：只读挂载，不进镜像。
+      # 左边是宿主机上的实际路径。用环境变量给，不要改这个文件本身，
+      # 否则下次拉新版本会和上游冲突：
+      #   echo 'DOC_DIR=/你的/文档库目录' > .env     # 之后 docker compose 自动读
+      #   或者一次性：DOC_DIR=/你的/文档库目录 docker compose up -d
+      # 不设时默认挂本项目目录下的 ./docs。
+      - "${DOC_DIR:-./docs}:/docs:ro"
+      # 语料库：必须可写，且不要放在只读的 /docs 下面
+      - "web_ics-corpus:/var/lib/web_ics-corpus"
+
+    # 非 root + 只读根文件系统 + 去掉全部 capability。
+    # 应用只往 /var/lib/web_ics-corpus 写盘，其余一律不需要写权限。
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          # 硬顶 500MB，与应用内硬限同值。应用在 RSS 到 500MB 时开始返 503，
+          # 容器也在同一点 OOM Kill；想留出降级余量就把这里调大（如 640M）。
+          # 阈值按稳态定的：冷启动 19MB，建完标题索引 310MB，阈值贴着稳态
+          # 会让守卫反复释放索引，每次搜索都要重建。
+          memory: 500M
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        # 限制日志体积，小内存机器上磁盘也要省着用
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  web_ics-corpus:
